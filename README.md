@@ -8,6 +8,7 @@ It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, a
 
 - Private, five-step DM creation wizard through `/create` or `/raid create`
 - Native Discord configuration dashboard through `/raid setup`
+- Skippable setup and feature walkthrough through `/raid gettingstarted`
 - All 26 EQ2 classes grouped into Fighter, Priest, Mage, and Scout
 - Attending, tentative, late, bench, absent, and withdraw responses
 - Optional signup notes such as “30 minutes late”
@@ -103,6 +104,7 @@ Every slash command also works as a traditional text command. For example, `/rai
 | `/create` | Organizer | Start the private raid creation wizard |
 | `/raid create` | Organizer | Alternate grouped form of `/create` |
 | `/raid setup` | Manage Server | Open the Discord configuration dashboard |
+| `/raid gettingstarted` | Manage Server | Open the skippable setup and feature walkthrough |
 | `/raid syncicons` | Red bot owner | Install or repair all 30 bundled EQ2 application emojis |
 | `/raid list` | Everyone | List upcoming, non-archived raids |
 | `/raid show event_id` | Everyone | Show a current roster by event ID |
@@ -115,6 +117,14 @@ Every slash command also works as a traditional text command. For example, `/rai
 | `/raid mentionrole [role]` | Manage Server | Set or clear the new-raid announcement role |
 
 An **organizer** is any user who has Manage Server, is the Red bot owner, or holds one of the roles selected in `/raid setup`. The creator of an event can always manage that event.
+
+### Getting started walkthrough
+
+Run `/raid gettingstarted`, or open `/raid setup` and select **Getting started**. The guide
+walks through the raid channel, organizer and announcement roles, creation defaults, EQ2 icon
+pack, and the complete creation/signup/management flow. Every configuration page has
+**Skip / Next**; skipped settings are left unchanged. **Full setup** opens the complete dashboard
+at any point.
 
 ## Signup behavior
 

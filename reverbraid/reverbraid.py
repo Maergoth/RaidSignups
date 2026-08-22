@@ -45,7 +45,7 @@ from .models import (
     parse_duration,
     trim_text,
 )
-from .views import ConfigDashboardView, ManageEventView, RaidSignupView
+from .views import ConfigDashboardView, GettingStartedView, ManageEventView, RaidSignupView
 from .wizard import RaidCreationWizard, RaidDraft, WizardCancelled
 
 log = logging.getLogger("red.Maergoth.ReverbRaid")
@@ -55,7 +55,7 @@ class ReverbRaid(commands.Cog):
     """Plan EQ2 raids with private creation prompts and persistent signup panels."""
 
     __author__ = "Maergoth"
-    __version__ = "1.1.1"
+    __version__ = "1.2.0"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -823,6 +823,21 @@ class ReverbRaid(commands.Cog):
         view = ConfigDashboardView(self, ctx.guild.id, ctx.author.id)
         message = await ctx.send(
             embed=await self.build_config_embed(ctx.guild.id),
+            view=view,
+            ephemeral=ctx.interaction is not None,
+        )
+        view.message = message
+
+    @raid_group.command(name="gettingstarted")
+    async def raid_getting_started(self, ctx: commands.Context) -> None:
+        """Open the skippable setup and feature walkthrough."""
+        if not ctx.author.guild_permissions.manage_guild:
+            raise commands.UserFeedbackCheckFailure(
+                "You need **Manage Server** to use the setup walkthrough."
+            )
+        view = GettingStartedView(self, ctx.guild.id, ctx.author.id)
+        message = await ctx.send(
+            embed=await view.build_embed(),
             view=view,
             ephemeral=ctx.interaction is not None,
         )

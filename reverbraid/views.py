@@ -671,6 +671,341 @@ class MentionRoleSelect(discord.ui.RoleSelect):
         )
 
 
+class GettingStartedChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, guide: "GettingStartedView"):
+        super().__init__(
+            placeholder="Choose the default raid channel, or skip this step…",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+        self.guide = guide
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.guide.cog.set_guild_setting(
+            interaction.guild_id, "default_channel_id", self.values[0].id
+        )
+        await interaction.response.edit_message(
+            embed=await self.guide.build_embed(),
+            view=self.guide,
+        )
+
+
+class GettingStartedOrganizerRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, guide: "GettingStartedView"):
+        super().__init__(
+            placeholder="Choose organizer roles, or skip this step…",
+            min_values=0,
+            max_values=10,
+            row=0,
+        )
+        self.guide = guide
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        role_ids = [role.id for role in self.values if not role.is_default()]
+        await self.guide.cog.set_guild_setting(
+            interaction.guild_id, "organizer_role_ids", role_ids
+        )
+        await interaction.response.edit_message(
+            embed=await self.guide.build_embed(),
+            view=self.guide,
+        )
+
+
+class GettingStartedMentionRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, guide: "GettingStartedView"):
+        super().__init__(
+            placeholder="Choose an announcement role, or skip this step…",
+            min_values=0,
+            max_values=1,
+            row=1,
+        )
+        self.guide = guide
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        role_id = None
+        if self.values and not self.values[0].is_default():
+            role_id = self.values[0].id
+        await self.guide.cog.set_guild_setting(
+            interaction.guild_id, "mention_role_id", role_id
+        )
+        await interaction.response.edit_message(
+            embed=await self.guide.build_embed(),
+            view=self.guide,
+        )
+
+
+class GettingStartedButton(discord.ui.Button):
+    def __init__(
+        self,
+        guide: "GettingStartedView",
+        action: str,
+        label: str,
+        *,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        emoji: Optional[str] = None,
+        row: int = 4,
+        disabled: bool = False,
+    ):
+        super().__init__(
+            label=label,
+            style=style,
+            emoji=emoji,
+            row=row,
+            disabled=disabled,
+        )
+        self.guide = guide
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.action == "back":
+            self.guide.step = max(0, self.guide.step - 1)
+            self.guide.rebuild_items()
+            await interaction.response.edit_message(
+                embed=await self.guide.build_embed(),
+                view=self.guide,
+            )
+            return
+        if self.action == "next":
+            self.guide.step = min(self.guide.LAST_STEP, self.guide.step + 1)
+            self.guide.rebuild_items()
+            await interaction.response.edit_message(
+                embed=await self.guide.build_embed(),
+                view=self.guide,
+            )
+            return
+        if self.action == "setup":
+            dashboard = ConfigDashboardView(
+                self.guide.cog,
+                self.guide.guild_id,
+                self.guide.owner_id,
+            )
+            dashboard.message = interaction.message
+            self.guide.stop()
+            await interaction.response.edit_message(
+                embed=await self.guide.cog.build_config_embed(self.guide.guild_id),
+                view=dashboard,
+            )
+            return
+        if self.action == "finish":
+            self.guide.stop()
+            embed = await self.guide.build_embed()
+            embed.set_footer(text="Getting started complete • Run /raid setup any time")
+            await interaction.response.edit_message(embed=embed, view=None)
+            return
+        if self.action == "timezone":
+            current = await self.guide.cog.get_guild_timezone(interaction.guild_id)
+            await interaction.response.send_modal(TimezoneModal(self.guide, current))
+            return
+        if self.action == "description":
+            settings = await self.guide.cog.get_guild_settings(interaction.guild_id)
+            await interaction.response.send_modal(
+                DescriptionModal(self.guide, settings["default_description"])
+            )
+            return
+        if self.action == "duration":
+            settings = await self.guide.cog.get_guild_settings(interaction.guild_id)
+            await interaction.response.send_modal(
+                DurationModal(self.guide, settings["default_duration_minutes"])
+            )
+            return
+        if self.action == "sync_icons":
+            if not await self.guide.cog.bot.is_owner(interaction.user):
+                await ephemeral_error(
+                    interaction,
+                    "Only the Red bot owner can change the bot's shared application emojis. "
+                    "You can skip this step.",
+                )
+                return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                created, reused, refreshed = await self.guide.cog.sync_application_icons()
+            except RaidInputError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
+            await self.guide.refresh_message()
+            await interaction.followup.send(
+                f"EQ2 icons are ready: **{created} created**, **{reused} reused**, and "
+                f"**{refreshed} active raid message(s) refreshed**.",
+                ephemeral=True,
+            )
+
+
+class GettingStartedView(discord.ui.View):
+    """Skippable setup and feature walkthrough for a single administrator."""
+
+    LAST_STEP = 5
+
+    def __init__(self, cog: "ReverbRaid", guild_id: int, owner_id: int, *, step: int = 0):
+        super().__init__(timeout=900)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.owner_id = owner_id
+        self.step = max(0, min(self.LAST_STEP, step))
+        self.message: Optional[discord.Message] = None
+        self.rebuild_items()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await ephemeral_error(
+                interaction, "Open your own Getting Started guide to use these controls."
+            )
+            return False
+        permissions = getattr(interaction.user, "guild_permissions", None)
+        if not permissions or not permissions.manage_guild:
+            await ephemeral_error(interaction, "You need **Manage Server** to change raid settings.")
+            return False
+        return True
+
+    async def refresh_message(self) -> None:
+        if self.message is not None:
+            self.rebuild_items()
+            await self.message.edit(embed=await self.build_embed(), view=self)
+
+    def rebuild_items(self) -> None:
+        self.clear_items()
+        if self.step == 1:
+            self.add_item(GettingStartedChannelSelect(self))
+        elif self.step == 2:
+            self.add_item(GettingStartedOrganizerRoleSelect(self))
+            self.add_item(GettingStartedMentionRoleSelect(self))
+        elif self.step == 3:
+            self.add_item(
+                GettingStartedButton(
+                    self,
+                    "timezone",
+                    "Timezone",
+                    style=discord.ButtonStyle.primary,
+                    emoji="🌐",
+                    row=0,
+                )
+            )
+            self.add_item(
+                GettingStartedButton(self, "duration", "Duration", emoji="🕒", row=0)
+            )
+            self.add_item(
+                GettingStartedButton(
+                    self, "description", "Default description", emoji="📝", row=0
+                )
+            )
+        elif self.step == 4:
+            self.add_item(
+                GettingStartedButton(
+                    self,
+                    "sync_icons",
+                    "Sync EQ2 icons",
+                    style=discord.ButtonStyle.success,
+                    emoji="🎨",
+                    row=0,
+                )
+            )
+
+        if self.step > 0:
+            self.add_item(GettingStartedButton(self, "back", "Back", emoji="⬅️"))
+        if self.step < self.LAST_STEP:
+            label = "Begin" if self.step == 0 else "Skip / Next"
+            self.add_item(
+                GettingStartedButton(
+                    self,
+                    "next",
+                    label,
+                    style=discord.ButtonStyle.primary,
+                    emoji="➡️",
+                )
+            )
+        self.add_item(GettingStartedButton(self, "setup", "Full setup", emoji="⚙️"))
+        if self.step == self.LAST_STEP:
+            self.add_item(
+                GettingStartedButton(
+                    self,
+                    "finish",
+                    "Finish",
+                    style=discord.ButtonStyle.success,
+                    emoji="✅",
+                )
+            )
+
+    async def build_embed(self) -> discord.Embed:
+        settings = await self.cog.get_guild_settings(self.guild_id)
+        channel_id = settings.get("default_channel_id")
+        role_ids = settings.get("organizer_role_ids", [])
+        mention_role_id = settings.get("mention_role_id")
+        icon_count = len(self.cog._archetype_icon_emojis) + len(self.cog._class_icon_emojis)
+
+        pages = (
+            (
+                "👋 Getting started with Reverb Raid",
+                "This walkthrough explains the setup and the complete raid flow. Nothing is "
+                "required: use **Skip / Next** on any setting you do not want to change.",
+                (
+                    ("What you will configure", "Raid channel, organizer access, defaults, and EQ2 icons."),
+                    ("What you will learn", "Creating raids, signing up, Bench/Absent behavior, and organizer tools."),
+                ),
+            ),
+            (
+                "📣 Step 1 — Raid channel",
+                "Choose where new signup messages should normally be posted. If you skip this, "
+                "the creation wizard uses the channel where the command was started.",
+                (("Current default", f"<#{channel_id}>" if channel_id else "*Command channel*"),),
+            ),
+            (
+                "🛡️ Step 2 — Organizers and announcements",
+                "Organizer roles may create and manage raids. Manage Server users always retain "
+                "access. The optional announcement role is mentioned when a raid is posted.",
+                (
+                    ("Organizer roles", ", ".join(f"<@&{role_id}>" for role_id in role_ids) or "*Manage Server only*"),
+                    ("Announcement role", f"<@&{mention_role_id}>" if mention_role_id else "*None*"),
+                ),
+            ),
+            (
+                "🗓️ Step 3 — Creation defaults",
+                "These values pre-fill the private `/create` wizard. Change any of them below, "
+                "or skip the entire page.",
+                (
+                    ("Timezone", f"`{settings['timezone']}`"),
+                    ("Duration", f"{settings['default_duration_minutes']} minutes"),
+                    ("Description", trim_text(settings["default_description"], 500) or "*None*"),
+                ),
+            ),
+            (
+                "🎨 Step 4 — EQ2 class icons",
+                "The bundled pack provides an icon for every class and archetype without using "
+                "server emoji slots. Only the Red bot owner can perform the one-time sync.",
+                (("Icon pack", f"**{icon_count}/30 ready**" if icon_count else "*Not synced*"),),
+            ),
+            (
+                "⚔️ Step 5 — How raids work",
+                "You are ready. Organizers run `/create` or `/raid create` and complete the "
+                "private DM prompts. The bot posts a persistent signup panel in the chosen channel.",
+                (
+                    (
+                        "Member controls",
+                        "Choose any EQ2 class, then set Attending, Tentative, Late, Bench, "
+                        "or Absent. Class and availability remain independent. Members can "
+                        "also add a note or withdraw.",
+                    ),
+                    (
+                        "Organizer controls",
+                        "Edit details, close or reopen signups, export CSV, archive the raid, "
+                        "or permanently delete its stored data.",
+                    ),
+                    (
+                        "Useful commands",
+                        "`/raid list` shows upcoming raids. `/raid show` displays a roster. "
+                        "`/raid manage` opens organizer controls.",
+                    ),
+                ),
+            ),
+        )
+        title, description, fields = pages[self.step]
+        embed = discord.Embed(title=title, description=description, color=0x6D4AFF)
+        for name, value in fields:
+            embed.add_field(name=name, value=value, inline=False)
+        embed.set_footer(text=f"Step {self.step + 1} of {self.LAST_STEP + 1} • Changes save immediately")
+        return embed
+
+
 class ConfigDashboardView(discord.ui.View):
     def __init__(self, cog: "ReverbRaid", guild_id: int, owner_id: int):
         super().__init__(timeout=600)
@@ -729,6 +1064,20 @@ class ConfigDashboardView(discord.ui.View):
                 ),
             )
         )
+
+    @discord.ui.button(
+        label="Getting started",
+        style=discord.ButtonStyle.primary,
+        emoji="📖",
+        row=4,
+    )
+    async def getting_started(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        guide = GettingStartedView(self.cog, self.guild_id, self.owner_id)
+        guide.message = interaction.message
+        self.stop()
+        await interaction.response.edit_message(embed=await guide.build_embed(), view=guide)
 
     @discord.ui.button(
         label="Sync EQ2 icons",

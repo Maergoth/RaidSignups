@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 - 2026-08-22
+
+- Added `/raid gettingstarted`, a six-page setup and feature walkthrough.
+- Added a Getting Started entry point to the `/raid setup` dashboard.
+- Added skippable configuration pages for the raid channel, roles, defaults, and EQ2 icons.
+- Added an overview of creation, signups, statuses, notes, organizer controls, and roster commands.
+- Added one-click access to the full setup dashboard from every walkthrough page.
+
 ## 1.1.1 - 2026-08-22
 
 - Added a Bench availability status for members who can be contacted if needed.
