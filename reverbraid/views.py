@@ -16,7 +16,15 @@ from .constants import (
     STATUS_EMOJIS,
     STATUS_LABELS,
 )
-from .models import RaidInputError, get_timezone, parse_duration, parse_raid_datetime, trim_text
+from .models import (
+    RaidInputError,
+    format_minutes,
+    get_timezone,
+    parse_duration,
+    parse_raid_datetime,
+    parse_reminder_minutes,
+    trim_text,
+)
 
 if TYPE_CHECKING:
     from .reverbraid import ReverbRaid
@@ -352,6 +360,37 @@ class RaidEditModal(discord.ui.Modal, title="Edit raid event"):
         await interaction.followup.send("Raid event updated.", ephemeral=True)
 
 
+class EventReminderModal(discord.ui.Modal, title="Raid reminder"):
+    lead_time = discord.ui.TextInput(
+        label="Lead time",
+        placeholder="1h, 90m, or off",
+        max_length=30,
+    )
+
+    def __init__(self, cog: "ReverbRaid", event_id: str, current_minutes: int):
+        super().__init__()
+        self.cog = cog
+        self.event_id = event_id
+        self.lead_time.default = f"{current_minutes}m" if current_minutes else "off"
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            minutes = parse_reminder_minutes(str(self.lead_time))
+            await self.cog.set_event_reminder(
+                interaction.guild_id,
+                self.event_id,
+                interaction.user,
+                minutes,
+            )
+        except RaidInputError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        value = f"{format_minutes(minutes)} before start" if minutes else "disabled"
+        await interaction.response.send_message(
+            f"This raid's reminder is now **{value}**.", ephemeral=True
+        )
+
+
 class ConfirmArchiveView(discord.ui.View):
     def __init__(self, cog: "ReverbRaid", event_id: str, owner_id: int):
         super().__init__(timeout=60)
@@ -457,7 +496,28 @@ class ManageEventView(discord.ui.View):
             return
         await interaction.followup.send(file=file, ephemeral=True)
 
-    @discord.ui.button(label="Archive", style=discord.ButtonStyle.danger, emoji="🗑️")
+    @discord.ui.button(
+        label="Reminder",
+        style=discord.ButtonStyle.secondary,
+        emoji="⏰",
+        row=0,
+    )
+    async def reminder(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        event = await self.cog.get_event(interaction.guild_id, self.event_id)
+        if event is None:
+            await ephemeral_error(interaction, "This raid no longer exists.")
+            return
+        await interaction.response.send_modal(
+            EventReminderModal(
+                self.cog,
+                self.event_id,
+                int(event.get("reminder_minutes") or 0),
+            )
+        )
+
+    @discord.ui.button(
+        label="Archive", style=discord.ButtonStyle.danger, emoji="🗑️", row=1
+    )
     async def archive(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await interaction.response.send_message(
             "Archive this raid? The roster is retained, but signup controls will be removed.",
@@ -465,7 +525,9 @@ class ManageEventView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Delete data", style=discord.ButtonStyle.danger, emoji="⚠️")
+    @discord.ui.button(
+        label="Delete data", style=discord.ButtonStyle.danger, emoji="⚠️", row=1
+    )
     async def delete_data(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await interaction.response.send_message(
             "Permanently delete this event and its roster? This cannot be undone.",
@@ -544,6 +606,35 @@ class DurationModal(discord.ui.Modal, title="Default raid duration"):
         await interaction.response.defer(ephemeral=True)
         await self.dashboard.refresh_message()
         await interaction.followup.send(f"Default duration set to {minutes} minutes.", ephemeral=True)
+
+
+class ReminderModal(discord.ui.Modal, title="Default raid reminder"):
+    lead_time = discord.ui.TextInput(
+        label="Lead time for new raids",
+        placeholder="1h, 90m, or off",
+        max_length=30,
+    )
+
+    def __init__(self, dashboard, current_minutes: int):
+        super().__init__()
+        self.dashboard = dashboard
+        self.lead_time.default = f"{current_minutes}m" if current_minutes else "off"
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            minutes = parse_reminder_minutes(str(self.lead_time))
+        except RaidInputError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await self.dashboard.cog.set_guild_setting(
+            interaction.guild_id, "default_reminder_minutes", minutes
+        )
+        await interaction.response.defer(ephemeral=True)
+        await self.dashboard.refresh_message()
+        value = f"{format_minutes(minutes)} before start" if minutes else "disabled"
+        await interaction.followup.send(
+            f"New raids will have reminders **{value}**.", ephemeral=True
+        )
 
 
 class ArchetypeEmojiModal(discord.ui.Modal, title="Archetype button icons"):
@@ -810,6 +901,12 @@ class GettingStartedButton(discord.ui.Button):
                 DurationModal(self.guide, settings["default_duration_minutes"])
             )
             return
+        if self.action == "reminder":
+            settings = await self.guide.cog.get_guild_settings(interaction.guild_id)
+            await interaction.response.send_modal(
+                ReminderModal(self.guide, settings["default_reminder_minutes"])
+            )
+            return
         if self.action == "sync_icons":
             if not await self.guide.cog.bot.is_owner(interaction.user):
                 await ephemeral_error(
@@ -885,6 +982,9 @@ class GettingStartedView(discord.ui.View):
                 GettingStartedButton(self, "duration", "Duration", emoji="🕒", row=0)
             )
             self.add_item(
+                GettingStartedButton(self, "reminder", "Reminder", emoji="⏰", row=0)
+            )
+            self.add_item(
                 GettingStartedButton(
                     self, "description", "Default description", emoji="📝", row=0
                 )
@@ -939,8 +1039,15 @@ class GettingStartedView(discord.ui.View):
                 "This walkthrough explains the setup and the complete raid flow. Nothing is "
                 "required: use **Skip / Next** on any setting you do not want to change.",
                 (
-                    ("What you will configure", "Raid channel, organizer access, defaults, and EQ2 icons."),
-                    ("What you will learn", "Creating raids, signing up, Bench/Absent behavior, and organizer tools."),
+                    (
+                        "What you will configure",
+                        "Raid channel, organizer access, defaults, reminders, and EQ2 icons.",
+                    ),
+                    (
+                        "What you will learn",
+                        "Creating raids, signing up, Bench/Absent behavior, reminders, "
+                        "history, CSV exports, and organizer tools.",
+                    ),
                 ),
             ),
             (
@@ -965,6 +1072,14 @@ class GettingStartedView(discord.ui.View):
                 (
                     ("Timezone", f"`{settings['timezone']}`"),
                     ("Duration", f"{settings['default_duration_minutes']} minutes"),
+                    (
+                        "Reminder",
+                        (
+                            f"{format_minutes(settings['default_reminder_minutes'])} before start"
+                            if settings["default_reminder_minutes"]
+                            else "Off"
+                        ),
+                    ),
                     ("Description", trim_text(settings["default_description"], 500) or "*None*"),
                 ),
             ),
@@ -988,12 +1103,20 @@ class GettingStartedView(discord.ui.View):
                     (
                         "Organizer controls",
                         "Edit details, close or reopen signups, export CSV, archive the raid, "
-                        "or permanently delete its stored data.",
+                        "adjust its reminder, or permanently delete its stored data.",
                     ),
                     (
-                        "Useful commands",
+                        "Reminders",
+                        "New raids inherit the server's reminder setting. The channel reminder "
+                        "pings Attending, Tentative, and Late members, but never Bench or "
+                        "Absent members. Organizers can override each event from `/raid manage`.",
+                    ),
+                    (
+                        "History and useful commands",
                         "`/raid list` shows upcoming raids. `/raid show` displays a roster. "
-                        "`/raid manage` opens organizer controls.",
+                        "`/raid manage` opens organizer controls. `/raid history` browses "
+                        "retained raids or one member's entries, and `/raid exporthistory` "
+                        "downloads all historic signups as CSV.",
                     ),
                 ),
             ),
@@ -1053,6 +1176,13 @@ class ConfigDashboardView(discord.ui.View):
             DurationModal(self, settings["default_duration_minutes"])
         )
 
+    @discord.ui.button(label="Reminder", style=discord.ButtonStyle.secondary, emoji="⏰", row=3)
+    async def reminder(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        settings = await self.cog.get_guild_settings(interaction.guild_id)
+        await interaction.response.send_modal(
+            ReminderModal(self, settings["default_reminder_minutes"])
+        )
+
     @discord.ui.button(label="Button icons", style=discord.ButtonStyle.secondary, row=3)
     async def icons(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         settings = await self.cog.get_guild_settings(interaction.guild_id)
@@ -1104,6 +1234,31 @@ class ConfigDashboardView(discord.ui.View):
             f"**{refreshed} active raid message(s) refreshed**.",
             ephemeral=True,
         )
+
+    @discord.ui.button(
+        label="Raid history",
+        style=discord.ButtonStyle.secondary,
+        emoji="📚",
+        row=4,
+    )
+    async def history(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_message(
+            embed=await self.cog.build_history_embed(interaction.guild),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Export history",
+        style=discord.ButtonStyle.secondary,
+        emoji="📄",
+        row=4,
+    )
+    async def export_history(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        file = await self.cog.export_history(interaction.guild_id)
+        await interaction.followup.send(file=file, ephemeral=True)
 
 
 def disable_view(view: discord.ui.View) -> None:

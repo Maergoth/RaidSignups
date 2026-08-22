@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 
 from dateutil import parser, tz
 
-from .constants import ARCHETYPES, CLASS_TO_ARCHETYPE, STATUS_LABELS
+from .constants import ARCHETYPES, CLASS_TO_ARCHETYPE, REMINDER_STATUSES, STATUS_LABELS
 
 
 class RaidInputError(ValueError):
@@ -119,6 +119,80 @@ def parse_duration(value: str) -> int:
     if minutes < 15 or minutes > 24 * 60:
         raise RaidInputError("Duration must be between 15 minutes and 24 hours.")
     return minutes
+
+
+def parse_reminder_minutes(value: str) -> int:
+    """Parse a reminder lead time, or return zero when reminders are disabled."""
+    value = value.strip().lower()
+    if value in {"off", "none", "disable", "disabled", "0"}:
+        return 0
+
+    if value.isdigit():
+        minutes = int(value)
+    else:
+        match = _DURATION.fullmatch(value)
+        if not match or not any(match.groupdict().values()):
+            raise RaidInputError(
+                "Use `off`, minutes, or a lead time such as `1h` or `2h 30m`."
+            )
+        hours = float(match.group("hours") or 0)
+        minutes = round(hours * 60) + int(match.group("minutes") or 0)
+
+    if minutes < 5 or minutes > 7 * 24 * 60:
+        raise RaidInputError("Reminder lead time must be between 5 minutes and 7 days.")
+    return minutes
+
+
+def format_minutes(minutes: int) -> str:
+    """Format a minute count as a concise human-readable duration."""
+    minutes = max(0, int(minutes))
+    if minutes == 0:
+        return "Off"
+    days, remainder = divmod(minutes, 24 * 60)
+    hours, remaining_minutes = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if remaining_minutes:
+        parts.append(
+            f"{remaining_minutes} minute{'s' if remaining_minutes != 1 else ''}"
+        )
+    return " ".join(parts)
+
+
+def select_historic_events(
+    events: Mapping[str, Mapping[str, Any]],
+    now_ts: int,
+    *,
+    member_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Return archived or started events, newest first, optionally filtered by member."""
+    selected: List[Dict[str, Any]] = []
+    for event_id, raw_event in events.items():
+        event = dict(raw_event)
+        event.setdefault("id", str(event_id))
+        if not event.get("archived") and int(event.get("start_ts") or 0) > now_ts:
+            continue
+        if member_id is not None and str(member_id) not in event.get("roster", {}):
+            continue
+        selected.append(event)
+    selected.sort(key=lambda event: int(event.get("start_ts") or 0), reverse=True)
+    return selected
+
+
+def reminder_recipient_ids(roster: Mapping[str, Mapping[str, Any]]) -> List[int]:
+    """Return valid user IDs whose current signup status should receive a reminder."""
+    recipients = []
+    for user_id, raw_signup in roster.items():
+        if normalize_signup(raw_signup)["status"] not in REMINDER_STATUSES:
+            continue
+        try:
+            recipients.append(int(user_id))
+        except (TypeError, ValueError):
+            continue
+    return recipients
 
 
 def normalize_signup(signup: Mapping[str, Any]) -> Dict[str, Any]:

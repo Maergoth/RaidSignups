@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 - 2026-08-22
+
+- Added a configurable default raid reminder through `/raid setup` and `/raid reminder`.
+- Added per-event reminder overrides through `/raid manage` and `/raid eventreminder`.
+- Added a restart-safe once-only reminder dispatcher that resets when a raid is rescheduled.
+- Reminder posts ping Attending, Tentative, and Late signups while excluding Bench and Absent.
+- Added organizer-only `/raid history [member]` browsing for completed and archived raids.
+- Added `/raid exporthistory [member]` for server-wide or per-member historic CSV exports.
+- Added reminder parsing, formatting, history selection, and migration regression tests.
+
 ## 1.2.0 - 2026-08-22
 
 - Added `/raid gettingstarted`, a six-page setup and feature walkthrough.

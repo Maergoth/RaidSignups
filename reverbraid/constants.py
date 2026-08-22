@@ -110,6 +110,7 @@ DEFAULT_GUILD = {
     "default_channel_id": None,
     "default_description": DEFAULT_DESCRIPTION,
     "default_duration_minutes": 180,
+    "default_reminder_minutes": 60,
     "organizer_role_ids": [],
     "mention_role_id": None,
     "archetype_emojis": {},
@@ -121,3 +122,7 @@ CONFIG_IDENTIFIER = 84739251020260822
 MAX_NOTE_LENGTH = 120
 MAX_TITLE_LENGTH = 100
 MAX_DESCRIPTION_LENGTH = 1500
+
+# Reminder pings are deliberately limited to members who are expected to attend.
+# Bench members asked to be contacted only if needed, while absent members opted out.
+REMINDER_STATUSES = frozenset({"attending", "tentative", "late"})

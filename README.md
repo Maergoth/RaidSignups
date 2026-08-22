@@ -18,7 +18,9 @@ It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, a
 - Bundled authentic icons for all 26 classes and all four archetypes
 - One-click application-emoji sync that does not consume server emoji slots
 - Configurable archetype button icons with Unicode fallbacks
+- Configurable, restart-safe reminders that ping attending, tentative, and late signups
 - Close/reopen signups, edit events, archive events, and export CSV rosters
+- Organizer-only raid history with server-wide and per-member CSV exports
 - Both slash commands and traditional Red prefix commands
 - Red-compatible end-user data export and deletion hooks
 - No external API keys, database, website, or background web service
@@ -107,11 +109,15 @@ Every slash command also works as a traditional text command. For example, `/rai
 | `/raid gettingstarted` | Manage Server | Open the skippable setup and feature walkthrough |
 | `/raid syncicons` | Red bot owner | Install or repair all 30 bundled EQ2 application emojis |
 | `/raid list` | Everyone | List upcoming, non-archived raids |
+| `/raid history [member]` | Organizer | Browse completed/archived raids, optionally for one member |
+| `/raid exporthistory [member]` | Organizer | Export all retained historic signups as CSV |
 | `/raid show event_id` | Everyone | Show a current roster by event ID |
 | `/raid manage event_id` | Event creator or organizer | Open edit, close, export, and archive controls |
+| `/raid eventreminder event_id lead_time` | Event creator or organizer | Override one raid's reminder, such as `2h` or `off` |
 | `/raid timezone timezone_name` | Manage Server | Set the IANA timezone |
 | `/raid channel channel` | Manage Server | Set the default raid channel |
 | `/raid duration duration` | Manage Server | Set the default duration |
+| `/raid reminder lead_time` | Manage Server | Set the reminder inherited by new raids, such as `1h` or `off` |
 | `/raid description description` | Manage Server | Set the default description |
 | `/raid organizerrole add\|remove role` | Manage Server | Add or remove an organizer role |
 | `/raid mentionrole [role]` | Manage Server | Set or clear the new-raid announcement role |
@@ -166,11 +172,33 @@ tomorrow 20:00
 
 Times are stored in UTC and displayed with Discord timestamps, so each member sees the raid in their own local timezone. Ambiguous and nonexistent daylight-saving times are rejected with a useful correction prompt.
 
+## Reminders
+
+New servers default to one reminder **1 hour before raid start**. Change it with `/raid setup`
+→ **Reminder** or `/raid reminder 2h`; use `off` to disable it. The value is copied onto each
+new raid, so changing the server default does not silently alter raids that are already posted.
+Use the **Reminder** button in `/raid manage` or `/raid eventreminder` to override one event.
+
+The bot checks persisted events once per minute. This survives restarts and records which raid
+start time was reminded, preventing duplicate reminders. Moving a raid to a new start time safely
+resets its reminder. The reminder is posted in the raid channel and pings Attending, Tentative,
+and Late signups. Bench and Absent entries are deliberately not pinged. Existing raids created
+before version 1.3.0 start with reminders off until an organizer explicitly enables one.
+
+## Raid history and CSV exports
+
+Completed and archived raids remain available to organizers through `/raid history`. Supply a
+member to see that person's retained class and status history. `/raid exporthistory` downloads a
+UTF-8 CSV containing every retained historic signup; supplying a member exports only that member.
+The export includes event metadata, UTC start time, Discord user ID, display name, class,
+archetype, status, note, and signup update time. Individual event exports remain available from
+`/raid manage event_id`.
+
 ## Persistence, privacy, and backups
 
 Raid settings and rosters use Red's `Config` storage for the guild. Buttons use stable custom IDs and are re-registered during `cog_load`, so active raid messages continue working after restarts and cog reloads.
 
-The cog stores only data needed for the roster: Discord user ID, display name, class, status, optional note, and the event creator ID. It implements Red's `red_get_data_for_user` and `red_delete_data_for_user` hooks. Archiving disables the message controls but deliberately retains the roster for organizer history and CSV export.
+The cog stores only data needed for the roster: Discord user ID, display name, class, status, optional note, and the event creator ID. It implements Red's `red_get_data_for_user` and `red_delete_data_for_user` hooks. Archiving disables the message controls but deliberately retains the roster for organizer-only history and CSV export.
 
 Back up this cog the same way you back up the rest of the Red instance data. Do not copy or commit Red's `config.json`, bot token, or complete data directory into this repository.
 

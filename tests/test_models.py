@@ -13,9 +13,13 @@ from reverbraid.constants import (
 from reverbraid.models import (
     RaidInputError,
     chunk_lines,
+    format_minutes,
     group_roster,
     parse_duration,
     parse_raid_datetime,
+    parse_reminder_minutes,
+    reminder_recipient_ids,
+    select_historic_events,
 )
 
 
@@ -32,6 +36,65 @@ class DurationTests(unittest.TestCase):
     def test_out_of_range(self):
         with self.assertRaises(RaidInputError):
             parse_duration("10m")
+
+
+class ReminderTests(unittest.TestCase):
+    def test_reminder_duration_and_off(self):
+        self.assertEqual(parse_reminder_minutes("1h 30m"), 90)
+        self.assertEqual(parse_reminder_minutes("off"), 0)
+
+    def test_reminder_range(self):
+        with self.assertRaises(RaidInputError):
+            parse_reminder_minutes("4m")
+        with self.assertRaises(RaidInputError):
+            parse_reminder_minutes("8 days")
+
+    def test_format_minutes(self):
+        self.assertEqual(format_minutes(0), "Off")
+        self.assertEqual(format_minutes(60), "1 hour")
+        self.assertEqual(format_minutes(1500), "1 day 1 hour")
+
+    def test_reminder_recipients_exclude_bench_and_absent(self):
+        roster = {
+            "1": {"status": "attending"},
+            "2": {"status": "tentative"},
+            "3": {"status": "late"},
+            "4": {"status": "bench"},
+            "5": {"status": "absent"},
+            "not-a-user": {"status": "attending"},
+        }
+        self.assertEqual(reminder_recipient_ids(roster), [1, 2, 3])
+
+
+class HistoryTests(unittest.TestCase):
+    def test_historic_events_include_started_and_archived(self):
+        events = {
+            "past": {"id": "past", "start_ts": 100, "roster": {"1": {}}},
+            "future": {"id": "future", "start_ts": 300, "roster": {"1": {}}},
+            "cancelled": {
+                "id": "cancelled",
+                "start_ts": 400,
+                "archived": True,
+                "roster": {"2": {}},
+            },
+        }
+        self.assertEqual(
+            [event["id"] for event in select_historic_events(events, 200)],
+            ["cancelled", "past"],
+        )
+
+    def test_historic_events_filter_member(self):
+        events = {
+            "one": {"id": "one", "start_ts": 100, "roster": {"1": {}}},
+            "two": {"id": "two", "start_ts": 90, "roster": {"2": {}}},
+        }
+        self.assertEqual(
+            [
+                event["id"]
+                for event in select_historic_events(events, 200, member_id="2")
+            ],
+            ["two"],
+        )
 
 
 class DateTimeTests(unittest.TestCase):

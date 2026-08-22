@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import discord
 from dateutil import tz
+from discord.ext import tasks
 from redbot.core import Config, app_commands, commands
 from redbot.core.bot import Red
 
@@ -39,10 +40,14 @@ from .constants import (
 from .models import (
     RaidInputError,
     chunk_lines,
+    format_minutes,
     get_timezone,
     group_roster,
     normalize_signup,
     parse_duration,
+    parse_reminder_minutes,
+    reminder_recipient_ids,
+    select_historic_events,
     trim_text,
 )
 from .views import ConfigDashboardView, GettingStartedView, ManageEventView, RaidSignupView
@@ -55,7 +60,7 @@ class ReverbRaid(commands.Cog):
     """Plan EQ2 raids with private creation prompts and persistent signup panels."""
 
     __author__ = "Maergoth"
-    __version__ = "1.2.0"
+    __version__ = "1.3.0"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -76,8 +81,17 @@ class ReverbRaid(commands.Cog):
         await self.load_application_icon_cache()
         all_guilds = await self.config.all_guilds()
         for raw_guild_id, settings in all_guilds.items():
-            guild = self.bot.get_guild(int(raw_guild_id))
-            for event_id, event in settings.get("events", {}).items():
+            guild_id = int(raw_guild_id)
+            guild = self.bot.get_guild(guild_id)
+            # Existing events predate reminders. Leave them disabled so installing an
+            # update cannot unexpectedly ping an old roster; organizers can enable a
+            # reminder for any active event from its management panel.
+            async with self.config.guild_from_id(guild_id).events() as events:
+                for event in events.values():
+                    event.setdefault("reminder_minutes", 0)
+                    event.setdefault("reminder_sent_for_start_ts", None)
+                restored_events = copy.deepcopy(events)
+            for event_id, event in restored_events.items():
                 if event.get("archived"):
                     continue
                 view = RaidSignupView(
@@ -90,9 +104,13 @@ class ReverbRaid(commands.Cog):
                     class_emoji_map=self.class_emoji_map,
                 )
                 self.bot.add_view(view, message_id=event.get("message_id"))
-                self._persistent_views[(int(raw_guild_id), event_id)] = view
+                self._persistent_views[(guild_id, event_id)] = view
+        if not self.reminder_dispatch.is_running():
+            self.reminder_dispatch.start()
 
     def cog_unload(self) -> None:
+        if self.reminder_dispatch.is_running():
+            self.reminder_dispatch.cancel()
         for view in self._persistent_views.values():
             view.stop()
         self._persistent_views.clear()
@@ -113,6 +131,7 @@ class ReverbRaid(commands.Cog):
             "default_channel_id",
             "default_description",
             "default_duration_minutes",
+            "default_reminder_minutes",
             "organizer_role_ids",
             "mention_role_id",
             "archetype_emojis",
@@ -179,6 +198,15 @@ class ReverbRaid(commands.Cog):
         embed.add_field(
             name="Default duration",
             value=f"{settings['default_duration_minutes']} minutes",
+            inline=True,
+        )
+        embed.add_field(
+            name="Raid reminder",
+            value=(
+                f"{format_minutes(settings['default_reminder_minutes'])} before start"
+                if settings["default_reminder_minutes"]
+                else "*Disabled*"
+            ),
             inline=True,
         )
         embed.add_field(name="Organizer roles", value=roles_value, inline=False)
@@ -372,6 +400,7 @@ class ReverbRaid(commands.Cog):
                 f"I need **View Channel**, **Send Messages**, and **Embed Links** in {channel.mention}."
             )
 
+        settings = await self.config.guild(guild).all()
         event_id = secrets.token_hex(6)
         event = {
             "id": event_id,
@@ -386,10 +415,11 @@ class ReverbRaid(commands.Cog):
             "created_ts": int(datetime.now(timezone.utc).timestamp()),
             "closed": False,
             "archived": False,
+            "reminder_minutes": int(settings.get("default_reminder_minutes", 60)),
+            "reminder_sent_for_start_ts": None,
             "roster": {},
         }
         await self._store_event(guild.id, event_id, event)
-        settings = await self.config.guild(guild).all()
         view = RaidSignupView(
             self,
             event_id,
@@ -449,8 +479,17 @@ class ReverbRaid(commands.Cog):
             inline=True,
         )
         embed.add_field(name="Expected end", value=f"<t:{end_ts}:t>", inline=True)
+        reminder_minutes = int(event.get("reminder_minutes") or 0)
+        reminder_value = (
+            f"{format_minutes(reminder_minutes)} before start"
+            if reminder_minutes
+            else "Off"
+        )
+        if event.get("reminder_sent_for_start_ts") == start_ts:
+            reminder_value += " • sent"
+        embed.add_field(name="Reminder", value=reminder_value, inline=True)
 
-        field_count = 3
+        field_count = 4
         used_characters = sum(
             len(field.name) + len(field.value) for field in embed.fields
         ) + len(embed.title or "") + len(embed.description or "")
@@ -568,6 +607,104 @@ class ReverbRaid(commands.Cog):
                     self._persistent_views[key] = view
 
     # ---------------------------------------------------------------------
+    # Restart-safe raid reminders
+    # ---------------------------------------------------------------------
+
+    def _build_reminder_content(self, guild: discord.Guild, event: dict) -> tuple[str, list]:
+        start_ts = int(event["start_ts"])
+        title = discord.utils.escape_markdown(str(event.get("title") or "Raid"))
+        message_id = event.get("message_id")
+        channel_id = event.get("channel_id")
+        link = (
+            f"https://discord.com/channels/{guild.id}/{channel_id}/{message_id}"
+            if channel_id and message_id
+            else None
+        )
+        first_line = f"⏰ **{title}** starts <t:{start_ts}:R> — <t:{start_ts}:F>."
+        if link:
+            first_line += f" [Open the signup]({link})"
+
+        recipient_ids = reminder_recipient_ids(event.get("roster", {}))
+
+        # Keep the post comfortably below Discord's content limit. A normal EQ2
+        # raid fits easily, while this also protects unusually large rosters.
+        selected_ids = []
+        content = first_line
+        for user_id in recipient_ids:
+            mention = f"<@{user_id}>"
+            candidate = f"{content}\n{mention}" if not selected_ids else f"{content} {mention}"
+            if len(candidate) > 1850:
+                break
+            content = candidate
+            selected_ids.append(user_id)
+        omitted = len(recipient_ids) - len(selected_ids)
+        if omitted:
+            content += f"\n*{omitted} additional signup(s) could not be mentioned in one post.*"
+        return content, [discord.Object(id=user_id) for user_id in selected_ids]
+
+    async def _send_due_reminder(self, guild_id: int, event_id: str, now_ts: int) -> bool:
+        async with self._event_locks[(guild_id, event_id)]:
+            event = await self.get_event(guild_id, event_id)
+            if event is None or event.get("archived"):
+                return False
+            start_ts = int(event.get("start_ts") or 0)
+            reminder_minutes = int(event.get("reminder_minutes") or 0)
+            if (
+                reminder_minutes <= 0
+                or start_ts <= now_ts
+                or now_ts < start_ts - reminder_minutes * 60
+                or event.get("reminder_sent_for_start_ts") == start_ts
+            ):
+                return False
+
+            guild = self.bot.get_guild(guild_id)
+            channel = guild.get_channel(event.get("channel_id")) if guild else None
+            if guild is None or not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                return False
+
+            content, recipients = self._build_reminder_content(guild, event)
+            await channel.send(
+                content,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False,
+                    roles=False,
+                    users=recipients,
+                    replied_user=False,
+                ),
+            )
+            async with self.config.guild_from_id(guild_id).events() as events:
+                current = events.get(event_id)
+                if current is not None and int(current.get("start_ts") or 0) == start_ts:
+                    current["reminder_sent_for_start_ts"] = start_ts
+            return True
+
+    @tasks.loop(seconds=60)
+    async def reminder_dispatch(self) -> None:
+        """Find due reminders in Red Config and deliver each event exactly once."""
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        for raw_guild_id, settings in (await self.config.all_guilds()).items():
+            guild_id = int(raw_guild_id)
+            for event_id in settings.get("events", {}):
+                try:
+                    await self._send_due_reminder(guild_id, event_id, now_ts)
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception(
+                        "Discord rejected the reminder for raid %s in guild %s",
+                        event_id,
+                        guild_id,
+                    )
+                except Exception:
+                    log.exception(
+                        "Unexpected reminder failure for raid %s in guild %s",
+                        event_id,
+                        guild_id,
+                    )
+
+    @reminder_dispatch.before_loop
+    async def before_reminder_dispatch(self) -> None:
+        await self.bot.wait_until_red_ready()
+
+    # ---------------------------------------------------------------------
     # Signup mutations
     # ---------------------------------------------------------------------
 
@@ -649,10 +786,11 @@ class ReverbRaid(commands.Cog):
             raise RaidInputError("You cannot manage this raid.")
         async with self._event_locks[(guild_id, event_id)]:
             async with self.config.guild_from_id(guild_id).events() as events:
-                if event_id not in events:
+                event = events.get(event_id)
+                if event is None or event.get("archived"):
                     raise RaidInputError("This raid no longer exists.")
-                events[event_id]["closed"] = not bool(events[event_id].get("closed"))
-                closed = events[event_id]["closed"]
+                event["closed"] = not bool(event.get("closed"))
+                closed = event["closed"]
         await self.refresh_event_message(guild_id, event_id)
         return closed
 
@@ -664,7 +802,24 @@ class ReverbRaid(commands.Cog):
                 event = events.get(event_id)
                 if event is None or event.get("archived"):
                     raise RaidInputError("This raid no longer exists.")
+                old_start_ts = int(event.get("start_ts") or 0)
                 event.update(changes)
+                if int(event.get("start_ts") or 0) != old_start_ts:
+                    event["reminder_sent_for_start_ts"] = None
+        await self.refresh_event_message(guild_id, event_id)
+
+    async def set_event_reminder(
+        self, guild_id: int, event_id: str, member, reminder_minutes: int
+    ) -> None:
+        if not await self.can_manage_event(member, guild_id, event_id):
+            raise RaidInputError("You cannot manage this raid.")
+        async with self._event_locks[(guild_id, event_id)]:
+            async with self.config.guild_from_id(guild_id).events() as events:
+                event = events.get(event_id)
+                if event is None or event.get("archived"):
+                    raise RaidInputError("This raid no longer exists.")
+                event["reminder_minutes"] = int(reminder_minutes)
+                event["reminder_sent_for_start_ts"] = None
         await self.refresh_event_message(guild_id, event_id)
 
     async def archive_event(self, guild_id: int, event_id: str, member) -> None:
@@ -748,6 +903,130 @@ class ReverbRaid(commands.Cog):
             )
         payload = io.BytesIO(output.getvalue().encode("utf-8-sig"))
         return discord.File(payload, filename=f"reverb-raid-{event_id}-roster.csv")
+
+    async def build_history_embed(
+        self, guild: discord.Guild, member: Optional[discord.Member] = None
+    ) -> discord.Embed:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        events = select_historic_events(
+            await self.config.guild(guild).events(),
+            now_ts,
+            member_id=str(member.id) if member else None,
+        )
+        title = f"Raid history for {member.display_name}" if member else "Reverb Raid history"
+        if not events:
+            description = (
+                "That member has no retained raid signup history."
+                if member
+                else "There are no completed or archived raids yet."
+            )
+            return discord.Embed(title=title, description=description, color=EMBED_COLOR)
+
+        lines = []
+        for event in events:
+            event_title = discord.utils.escape_markdown(str(event.get("title") or "Raid"))
+            message_id = event.get("message_id")
+            channel_id = event.get("channel_id")
+            link = (
+                f"https://discord.com/channels/{guild.id}/{channel_id}/{message_id}"
+                if channel_id and message_id
+                else None
+            )
+            title_display = f"[{event_title}]({link})" if link else event_title
+            state = "archived" if event.get("archived") else "completed"
+            if member:
+                signup = normalize_signup(event.get("roster", {}).get(str(member.id), {}))
+                response = STATUS_LABELS[signup["status"]]
+                class_name = signup["class_name"] or "No class"
+                detail = f"**{class_name}** • {response}"
+            else:
+                count = len(event.get("roster", {}))
+                detail = f"{count} response{'s' if count != 1 else ''}"
+            line = (
+                f"• {title_display} — <t:{int(event.get('start_ts') or 0)}:d> — "
+                f"{detail} — `{state}` — `{event['id']}`"
+            )
+            if len("\n".join((*lines, line))) > 3900 or len(lines) >= 20:
+                break
+            lines.append(line)
+
+        embed = discord.Embed(title=title, description="\n".join(lines), color=EMBED_COLOR)
+        if len(events) > len(lines):
+            embed.set_footer(
+                text=f"Showing the newest {len(lines)} of {len(events)} entries • CSV export includes all"
+            )
+        else:
+            embed.set_footer(text=f"{len(events)} retained historic raid(s)")
+        return embed
+
+    async def export_history(
+        self, guild_id: int, member_id: Optional[int] = None
+    ) -> discord.File:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        events = select_historic_events(
+            await self.config.guild_from_id(guild_id).events(),
+            now_ts,
+            member_id=str(member_id) if member_id else None,
+        )
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "Event ID",
+                "Event title",
+                "Start time (UTC)",
+                "Start timestamp",
+                "Duration minutes",
+                "Archived",
+                "Discord user ID",
+                "Display name",
+                "Class",
+                "Archetype",
+                "Status",
+                "Note",
+                "Signup updated (UTC)",
+            ]
+        )
+        for event in events:
+            start_ts = int(event.get("start_ts") or 0)
+            start_utc = datetime.fromtimestamp(start_ts, timezone.utc).isoformat()
+            roster = event.get("roster", {})
+            rows = list(roster.items())
+            if member_id is not None:
+                raw = roster.get(str(member_id))
+                rows = [(str(member_id), raw)] if raw is not None else []
+            if not rows:
+                rows = [("", None)]
+            for user_id, raw in rows:
+                signup = normalize_signup(raw or {}) if raw is not None else None
+                updated_ts = signup["updated_at"] if signup else 0
+                writer.writerow(
+                    [
+                        event["id"],
+                        self._csv_safe(event.get("title", "Raid")),
+                        start_utc,
+                        start_ts,
+                        int(event.get("duration_minutes") or 0),
+                        bool(event.get("archived")),
+                        user_id,
+                        self._csv_safe(signup["display_name"]) if signup else "",
+                        signup["class_name"] or "" if signup else "",
+                        signup["archetype"] or "" if signup else "",
+                        signup["status"] if signup else "",
+                        self._csv_safe(signup["note"]) if signup else "",
+                        (
+                            datetime.fromtimestamp(updated_ts, timezone.utc).isoformat()
+                            if updated_ts
+                            else ""
+                        ),
+                    ]
+                )
+        payload = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+        suffix = f"-member-{member_id}" if member_id else ""
+        return discord.File(
+            payload,
+            filename=f"reverb-raid-history{suffix}-{datetime.now(timezone.utc):%Y%m%d}.csv",
+        )
 
     @staticmethod
     def _csv_safe(value: str) -> str:
@@ -896,6 +1175,26 @@ class ReverbRaid(commands.Cog):
         )
         await ctx.send(embed=embed, ephemeral=ctx.interaction is not None)
 
+    @raid_group.command(name="history")
+    async def raid_history(
+        self, ctx: commands.Context, member: Optional[discord.Member] = None
+    ) -> None:
+        """View retained completed and archived raids, optionally for one member."""
+        await self.require_organizer(ctx)
+        await ctx.send(
+            embed=await self.build_history_embed(ctx.guild, member),
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @raid_group.command(name="exporthistory")
+    async def raid_export_history(
+        self, ctx: commands.Context, member: Optional[discord.Member] = None
+    ) -> None:
+        """Export all retained historic signup entries as CSV."""
+        await self.require_organizer(ctx)
+        file = await self.export_history(ctx.guild.id, member.id if member else None)
+        await ctx.send(file=file, ephemeral=ctx.interaction is not None)
+
     @raid_group.command(name="show")
     async def raid_show(self, ctx: commands.Context, event_id: str) -> None:
         """Show the link and current roster for an event ID."""
@@ -922,6 +1221,22 @@ class ReverbRaid(commands.Cog):
         await ctx.send(
             f"Manage **{event['title']}** (`{event_id}`):",
             view=view,
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @raid_group.command(name="eventreminder")
+    async def raid_event_reminder(
+        self, ctx: commands.Context, event_id: str, lead_time: str
+    ) -> None:
+        """Set this raid's reminder lead time, such as 1h, or use off."""
+        try:
+            minutes = parse_reminder_minutes(lead_time)
+            await self.set_event_reminder(ctx.guild.id, event_id, ctx.author, minutes)
+        except RaidInputError as exc:
+            raise commands.UserFeedbackCheckFailure(str(exc)) from exc
+        value = f"{format_minutes(minutes)} before start" if minutes else "disabled"
+        await ctx.send(
+            f"That raid's reminder is now **{value}**.",
             ephemeral=ctx.interaction is not None,
         )
 
@@ -966,6 +1281,21 @@ class ReverbRaid(commands.Cog):
         await self.set_guild_setting(ctx.guild.id, "default_duration_minutes", minutes)
         await ctx.send(
             f"Default raid duration set to {minutes} minutes.",
+            ephemeral=ctx.interaction is not None,
+        )
+
+    @raid_group.command(name="reminder")
+    async def raid_reminder(self, ctx: commands.Context, lead_time: str) -> None:
+        """Set the default reminder for new raids, such as 1h, or use off."""
+        await self._require_manage_guild(ctx)
+        try:
+            minutes = parse_reminder_minutes(lead_time)
+        except RaidInputError as exc:
+            raise commands.UserFeedbackCheckFailure(str(exc)) from exc
+        await self.set_guild_setting(ctx.guild.id, "default_reminder_minutes", minutes)
+        value = f"{format_minutes(minutes)} before start" if minutes else "disabled"
+        await ctx.send(
+            f"New raids will have reminders **{value}**.",
             ephemeral=ctx.interaction is not None,
         )
 
