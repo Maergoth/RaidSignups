@@ -25,7 +25,7 @@ It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, a
 Run these commands in Discord as the Red bot owner. Replace `[p]` with your bot's prefix.
 
 ```text
-[p]repo add reverb-raid https://github.com/Maergoth/reverb-raid-signup-helper
+[p]repo add reverb-raid https://github.com/Maergoth/RaidSignups
 [p]cog install reverb-raid reverbraid
 [p]load reverbraid
 ```
