@@ -53,6 +53,30 @@ ARCHETYPE_EMOJIS = {
     "scout": "🗡️",
 }
 
+# Discord components only accept Unicode or Discord-managed emoji objects. These
+# bundled images are uploaded once as application emojis by the bot owner, making
+# them available in every server without consuming guild emoji slots.
+ARCHETYPE_ICON_FILES = {
+    "fighter": "Fighter_Icon.png",
+    "priest": "Priest_Icon.png",
+    "mage": "Mage_Icon.png",
+    "scout": "Scout_Icon.png",
+}
+
+CLASS_ICON_FILES = {
+    class_name: f"{class_name}_Icon.png"
+    for class_names in ARCHETYPES.values()
+    for class_name in class_names
+}
+
+ARCHETYPE_APPLICATION_EMOJI_NAMES = {
+    archetype: f"eq2_{archetype}" for archetype in ARCHETYPES
+}
+
+CLASS_APPLICATION_EMOJI_NAMES = {
+    class_name: f"eq2_{class_name.casefold()}" for class_name in CLASS_ICON_FILES
+}
+
 STATUS_LABELS = {
     "attending": "Attending",
     "tentative": "Tentative",

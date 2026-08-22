@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 - 2026-08-22
+
+- Bundled authentic artwork for all 26 EverQuest II classes and all four archetypes.
+- Added owner-only application-emoji syncing through `/raid setup` and `/raid syncicons`.
+- Added class-specific icons to class selectors and live roster entries.
+- Added archetype artwork to signup buttons and roster headings without consuming guild emoji slots.
+- Added icon completeness, file-size, format, and emoji-name regression tests.
+
 ## 1.0.2 - 2026-08-22
 
 - Replaced the unsupported Fighter glyph with Discord's valid shield emoji.

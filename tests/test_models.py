@@ -1,7 +1,15 @@
 from datetime import datetime, timezone
+from pathlib import Path
 import unittest
 
-from reverbraid.constants import ARCHETYPE_EMOJIS
+from reverbraid.constants import (
+    ARCHETYPE_APPLICATION_EMOJI_NAMES,
+    ARCHETYPE_EMOJIS,
+    ARCHETYPE_ICON_FILES,
+    ARCHETYPES,
+    CLASS_APPLICATION_EMOJI_NAMES,
+    CLASS_ICON_FILES,
+)
 from reverbraid.models import (
     RaidInputError,
     chunk_lines,
@@ -97,6 +105,35 @@ class ComponentEmojiTests(unittest.TestCase):
                 "scout": "🗡️",
             },
         )
+
+    def test_bundled_icon_pack_is_complete_and_discord_sized(self):
+        class_names = {
+            class_name for class_names in ARCHETYPES.values() for class_name in class_names
+        }
+        self.assertEqual(set(CLASS_ICON_FILES), class_names)
+        self.assertEqual(set(CLASS_APPLICATION_EMOJI_NAMES), class_names)
+        self.assertEqual(set(ARCHETYPE_ICON_FILES), set(ARCHETYPES))
+        self.assertEqual(set(ARCHETYPE_APPLICATION_EMOJI_NAMES), set(ARCHETYPES))
+
+        icon_dir = Path(__file__).parents[1] / "reverbraid" / "assets" / "icons"
+        filenames = set(ARCHETYPE_ICON_FILES.values()) | set(CLASS_ICON_FILES.values())
+        self.assertEqual(len(filenames), 30)
+        for filename in filenames:
+            path = icon_dir / filename
+            self.assertTrue(path.is_file(), filename)
+            self.assertLessEqual(path.stat().st_size, 256 * 1024, filename)
+            self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n", filename)
+
+    def test_application_emoji_names_are_unique_and_valid(self):
+        names = [
+            *ARCHETYPE_APPLICATION_EMOJI_NAMES.values(),
+            *CLASS_APPLICATION_EMOJI_NAMES.values(),
+        ]
+        self.assertEqual(len(names), len(set(names)))
+        for name in names:
+            self.assertGreaterEqual(len(name), 2)
+            self.assertLessEqual(len(name), 32)
+            self.assertTrue(name.replace("_", "").isalnum(), name)
 
 
 if __name__ == "__main__":

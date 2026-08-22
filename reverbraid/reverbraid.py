@@ -11,6 +11,7 @@ import logging
 import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -19,8 +20,13 @@ from redbot.core import Config, app_commands, commands
 from redbot.core.bot import Red
 
 from .constants import (
+    ARCHETYPE_APPLICATION_EMOJI_NAMES,
     ARCHETYPE_EMOJIS,
+    ARCHETYPE_ICON_FILES,
     ARCHETYPE_LABELS,
+    CLASS_APPLICATION_EMOJI_NAMES,
+    CLASS_ICON_FILES,
+    CLASS_TO_ARCHETYPE,
     CONFIG_IDENTIFIER,
     DEFAULT_GUILD,
     EMBED_COLOR,
@@ -49,7 +55,7 @@ class ReverbRaid(commands.Cog):
     """Plan EQ2 raids with private creation prompts and persistent signup panels."""
 
     __author__ = "Maergoth"
-    __version__ = "1.0.2"
+    __version__ = "1.1.0"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -62,9 +68,12 @@ class ReverbRaid(commands.Cog):
         self._event_locks: Dict[tuple[int, str], asyncio.Lock] = defaultdict(asyncio.Lock)
         self._active_wizards: set[tuple[int, int]] = set()
         self._persistent_views: Dict[tuple[int, str], RaidSignupView] = {}
+        self._archetype_icon_emojis: Dict[str, str] = {}
+        self._class_icon_emojis: Dict[str, str] = {}
 
     async def cog_load(self) -> None:
         """Restore persistent button callbacks after a bot restart or cog reload."""
+        await self.load_application_icon_cache()
         all_guilds = await self.config.all_guilds()
         for raw_guild_id, settings in all_guilds.items():
             guild = self.bot.get_guild(int(raw_guild_id))
@@ -75,9 +84,10 @@ class ReverbRaid(commands.Cog):
                     self,
                     event_id,
                     closed=bool(event.get("closed")),
-                    emoji_map=self.resolve_emoji_map(
+                    emoji_map=self.resolve_archetype_emoji_map(
                         guild, settings.get("archetype_emojis", {})
                     ),
+                    class_emoji_map=self.class_emoji_map,
                 )
                 self.bot.add_view(view, message_id=event.get("message_id"))
                 self._persistent_views[(int(raw_guild_id), event_id)] = view
@@ -142,13 +152,16 @@ class ReverbRaid(commands.Cog):
 
     async def build_config_embed(self, guild_id: int) -> discord.Embed:
         settings = await self.get_guild_settings(guild_id)
+        guild = self.bot.get_guild(guild_id)
         channel_id = settings.get("default_channel_id")
         role_ids = settings.get("organizer_role_ids", [])
         channel_value = f"<#{channel_id}>" if channel_id else "*Use the command channel*"
         roles_value = ", ".join(f"<@&{role_id}>" for role_id in role_ids) or "*Manage Server only*"
         mention_role_id = settings.get("mention_role_id")
         mention_value = f"<@&{mention_role_id}>" if mention_role_id else "*No automatic mention*"
-        emoji_map = settings.get("archetype_emojis", {})
+        emoji_map = self.resolve_archetype_emoji_map(
+            guild, settings.get("archetype_emojis", {})
+        )
         emoji_value = "  ".join(
             f"{emoji_map.get(key, ARCHETYPE_EMOJIS[key])} {ARCHETYPE_LABELS[key]}"
             for key in ("fighter", "priest", "mage", "scout")
@@ -171,6 +184,14 @@ class ReverbRaid(commands.Cog):
         embed.add_field(name="Organizer roles", value=roles_value, inline=False)
         embed.add_field(name="Announcement role", value=mention_value, inline=False)
         embed.add_field(name="Button icons", value=emoji_value, inline=False)
+        icon_count = len(self._archetype_icon_emojis) + len(self._class_icon_emojis)
+        icon_state = (
+            f"**{icon_count}/30 ready** — authentic icons appear on archetype buttons, "
+            "class choices, and roster entries."
+            if icon_count
+            else "*Not installed yet.* The Red bot owner can use **Sync EQ2 icons** below."
+        )
+        embed.add_field(name="EQ2 icon pack", value=icon_state, inline=False)
         embed.add_field(
             name="Default description",
             value=trim_text(settings["default_description"], 900) or "*None*",
@@ -179,18 +200,143 @@ class ReverbRaid(commands.Cog):
         embed.set_footer(text="Administrators always retain access.")
         return embed
 
-    @staticmethod
-    def resolve_emoji_map(guild: Optional[discord.Guild], configured: dict) -> dict:
-        """Return only configured emojis that Discord can still render."""
-        resolved = {}
+    @property
+    def class_emoji_map(self) -> dict:
+        return dict(self._class_icon_emojis)
+
+    def resolve_archetype_emoji_map(
+        self, guild: Optional[discord.Guild], configured: dict
+    ) -> dict:
+        """Merge the bundled icon pack with valid per-guild overrides."""
+        resolved = {
+            archetype: self._archetype_icon_emojis.get(
+                archetype, ARCHETYPE_EMOJIS[archetype]
+            )
+            for archetype in ARCHETYPE_LABELS
+        }
         for archetype, value in configured.items():
-            if not value:
+            if archetype not in ARCHETYPE_LABELS or not value:
                 continue
             emoji = discord.PartialEmoji.from_str(str(value))
-            if emoji.id is not None and (guild is None or guild.get_emoji(emoji.id) is None):
+            if emoji.id is not None and (
+                guild is None
+                or (
+                    guild.get_emoji(emoji.id) is None
+                    and emoji.id not in self._application_emoji_ids
+                )
+            ):
                 continue
             resolved[archetype] = str(value)
         return resolved
+
+    @property
+    def _application_emoji_ids(self) -> set[int]:
+        values = (*self._archetype_icon_emojis.values(), *self._class_icon_emojis.values())
+        return {
+            emoji.id
+            for value in values
+            if (emoji := discord.PartialEmoji.from_str(value)).id is not None
+        }
+
+    def is_application_emoji_id(self, emoji_id: int) -> bool:
+        return emoji_id in self._application_emoji_ids
+
+    @staticmethod
+    def _icon_asset_path(filename: str) -> Path:
+        return Path(__file__).with_name("assets") / "icons" / filename
+
+    async def load_application_icon_cache(self) -> None:
+        """Discover already-installed Reverb Raid application emojis."""
+        self._archetype_icon_emojis.clear()
+        self._class_icon_emojis.clear()
+        fetcher = getattr(self.bot, "fetch_application_emojis", None)
+        if fetcher is None:
+            log.warning("discord.py does not expose application emoji support")
+            return
+        try:
+            emojis = await fetcher()
+        except (discord.HTTPException, discord.MissingApplicationID):
+            log.exception("Could not load Reverb Raid application emojis")
+            return
+        by_name = {emoji.name: str(emoji) for emoji in emojis}
+        self._archetype_icon_emojis.update(
+            {
+                key: by_name[name]
+                for key, name in ARCHETYPE_APPLICATION_EMOJI_NAMES.items()
+                if name in by_name
+            }
+        )
+        self._class_icon_emojis.update(
+            {
+                key: by_name[name]
+                for key, name in CLASS_APPLICATION_EMOJI_NAMES.items()
+                if name in by_name
+            }
+        )
+
+    async def sync_application_icons(self) -> tuple[int, int, int]:
+        """Create missing bundled application emojis and refresh active raids."""
+        fetcher = getattr(self.bot, "fetch_application_emojis", None)
+        creator = getattr(self.bot, "create_application_emoji", None)
+        if fetcher is None or creator is None:
+            raise RaidInputError(
+                "This Red installation does not support application emojis. "
+                "Reverb Raid requires discord.py 2.5 or newer for the bundled icon pack."
+            )
+        try:
+            existing = await fetcher()
+        except (discord.HTTPException, discord.MissingApplicationID) as exc:
+            raise RaidInputError(f"Discord would not list the bot's application emojis: {exc}") from exc
+        by_name = {emoji.name: emoji for emoji in existing}
+        created = 0
+        reused = 0
+
+        definitions = [
+            ("archetype", key, ARCHETYPE_APPLICATION_EMOJI_NAMES[key], filename)
+            for key, filename in ARCHETYPE_ICON_FILES.items()
+        ]
+        definitions.extend(
+            ("class", key, CLASS_APPLICATION_EMOJI_NAMES[key], filename)
+            for key, filename in CLASS_ICON_FILES.items()
+        )
+        resolved_archetypes: Dict[str, str] = {}
+        resolved_classes: Dict[str, str] = {}
+        for kind, key, emoji_name, filename in definitions:
+            emoji = by_name.get(emoji_name)
+            if emoji is None:
+                asset_path = self._icon_asset_path(filename)
+                if not asset_path.is_file():
+                    raise RaidInputError(f"The bundled icon `{filename}` is missing from the cog.")
+                try:
+                    emoji = await creator(name=emoji_name, image=asset_path.read_bytes())
+                except discord.HTTPException as exc:
+                    # Keep any successfully-created icons discoverable on the next attempt.
+                    await self.load_application_icon_cache()
+                    raise RaidInputError(
+                        f"Discord stopped the icon sync after {created} new icon(s): {exc}"
+                    ) from exc
+                by_name[emoji_name] = emoji
+                created += 1
+            else:
+                reused += 1
+            target = resolved_archetypes if kind == "archetype" else resolved_classes
+            target[key] = str(emoji)
+
+        self._archetype_icon_emojis = resolved_archetypes
+        self._class_icon_emojis = resolved_classes
+        refreshed = await self.refresh_all_active_events()
+        return created, reused, refreshed
+
+    async def refresh_all_active_events(self) -> int:
+        refreshed = 0
+        for raw_guild_id, settings in (await self.config.all_guilds()).items():
+            guild_id = int(raw_guild_id)
+            for event_id, event in settings.get("events", {}).items():
+                if event.get("archived") or not event.get("message_id"):
+                    continue
+                await self.refresh_event_message(guild_id, event_id)
+                refreshed += 1
+        return refreshed
 
     # ---------------------------------------------------------------------
     # Event persistence and rendering
@@ -247,7 +393,10 @@ class ReverbRaid(commands.Cog):
         view = RaidSignupView(
             self,
             event_id,
-            emoji_map=self.resolve_emoji_map(guild, settings.get("archetype_emojis", {})),
+            emoji_map=self.resolve_archetype_emoji_map(
+                guild, settings.get("archetype_emojis", {})
+            ),
+            class_emoji_map=self.class_emoji_map,
         )
         mention_role_id = settings.get("mention_role_id")
         content = f"<@&{mention_role_id}>" if mention_role_id else None
@@ -274,7 +423,7 @@ class ReverbRaid(commands.Cog):
 
     async def build_event_embed(self, guild: discord.Guild, event: dict) -> discord.Embed:
         roster = event.get("roster", {})
-        emoji_map = self.resolve_emoji_map(
+        emoji_map = self.resolve_archetype_emoji_map(
             guild, await self.config.guild(guild).archetype_emojis()
         )
         grouped, absent = group_roster(roster)
@@ -357,13 +506,17 @@ class ReverbRaid(commands.Cog):
         embed.set_footer(text=f"{state}  •  {status_summary}  •  Event ID: {event['id']}")
         return embed
 
-    @staticmethod
-    def _format_signup_line(user_id: str, signup: dict) -> str:
+    def _format_signup_line(self, user_id: str, signup: dict) -> str:
         class_name = signup.get("class_name") or "Unassigned"
         status = signup.get("status", "attending")
         note = trim_text(str(signup.get("note") or ""), MAX_NOTE_LENGTH)
         note_suffix = f" — *{note}*" if note else ""
-        return f"{STATUS_EMOJIS.get(status, '•')} **{class_name}** — <@{user_id}>{note_suffix}"
+        class_icon = self._class_icon_emojis.get(class_name)
+        icon_prefix = f"{class_icon} " if class_icon else ""
+        return (
+            f"{STATUS_EMOJIS.get(status, '•')} {icon_prefix}**{class_name}** — "
+            f"<@{user_id}>{note_suffix}"
+        )
 
     async def refresh_event_message(self, guild_id: int, event_id: str) -> None:
         async with self._event_locks[(guild_id, event_id)]:
@@ -381,7 +534,8 @@ class ReverbRaid(commands.Cog):
                     self,
                     event_id,
                     closed=bool(event.get("closed")),
-                    emoji_map=self.resolve_emoji_map(guild, emoji_map),
+                    emoji_map=self.resolve_archetype_emoji_map(guild, emoji_map),
+                    class_emoji_map=self.class_emoji_map,
                 )
             key = (guild_id, event_id)
             old_view = self._persistent_views.pop(key, None)
@@ -669,6 +823,25 @@ class ReverbRaid(commands.Cog):
             ephemeral=ctx.interaction is not None,
         )
         view.message = message
+
+    @raid_group.command(name="syncicons")
+    @commands.is_owner()
+    async def raid_sync_icons(self, ctx: commands.Context) -> None:
+        """Install or repair the bundled EQ2 application emoji pack."""
+        try:
+            if ctx.interaction is not None:
+                await ctx.defer(ephemeral=True)
+                created, reused, refreshed = await self.sync_application_icons()
+            else:
+                async with ctx.typing():
+                    created, reused, refreshed = await self.sync_application_icons()
+        except RaidInputError as exc:
+            raise commands.UserFeedbackCheckFailure(str(exc)) from exc
+        await ctx.send(
+            f"EQ2 icons are ready: **{created} created**, **{reused} reused**, and "
+            f"**{refreshed} active raid message(s) refreshed**.",
+            ephemeral=ctx.interaction is not None,
+        )
 
     @raid_group.command(name="list")
     async def raid_list(self, ctx: commands.Context) -> None:

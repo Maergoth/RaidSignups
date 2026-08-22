@@ -39,6 +39,7 @@ class ClassButton(discord.ui.Button):
         *,
         disabled: bool,
         emoji: str,
+        class_emoji_map: dict,
     ):
         super().__init__(
             label=ARCHETYPE_LABELS[archetype],
@@ -52,6 +53,7 @@ class ClassButton(discord.ui.Button):
         self.event_id = event_id
         self.archetype = archetype
         self.display_emoji = emoji
+        self.class_emoji_map = class_emoji_map
 
     async def callback(self, interaction: discord.Interaction) -> None:
         event = await self.cog.get_event(interaction.guild_id, self.event_id)
@@ -66,6 +68,7 @@ class ClassButton(discord.ui.Button):
             self.event_id,
             self.archetype,
             self.display_emoji,
+            self.class_emoji_map,
         )
         await interaction.response.send_message(
             f"Choose your **{ARCHETYPE_LABELS[self.archetype]}** class:",
@@ -75,12 +78,19 @@ class ClassButton(discord.ui.Button):
 
 
 class ClassSelect(discord.ui.Select):
-    def __init__(self, cog: "ReverbRaid", event_id: str, archetype: str, emoji: str):
+    def __init__(
+        self,
+        cog: "ReverbRaid",
+        event_id: str,
+        archetype: str,
+        emoji: str,
+        class_emoji_map: dict,
+    ):
         options = [
             discord.SelectOption(
                 label=class_name,
                 value=class_name,
-                emoji=emoji,
+                emoji=class_emoji_map.get(class_name, emoji),
             )
             for class_name in ARCHETYPES[archetype]
         ]
@@ -109,9 +119,16 @@ class ClassSelect(discord.ui.Select):
 
 
 class ClassSelectView(discord.ui.View):
-    def __init__(self, cog: "ReverbRaid", event_id: str, archetype: str, emoji: str):
+    def __init__(
+        self,
+        cog: "ReverbRaid",
+        event_id: str,
+        archetype: str,
+        emoji: str,
+        class_emoji_map: dict,
+    ):
         super().__init__(timeout=120)
-        self.add_item(ClassSelect(cog, event_id, archetype, emoji))
+        self.add_item(ClassSelect(cog, event_id, archetype, emoji, class_emoji_map))
 
 
 class StatusButton(discord.ui.Button):
@@ -265,9 +282,11 @@ class RaidSignupView(discord.ui.View):
         *,
         closed: bool = False,
         emoji_map: Optional[dict] = None,
+        class_emoji_map: Optional[dict] = None,
     ):
         super().__init__(timeout=None)
         emoji_map = emoji_map or {}
+        class_emoji_map = class_emoji_map or {}
         for archetype in ARCHETYPES:
             self.add_item(
                 ClassButton(
@@ -276,6 +295,7 @@ class RaidSignupView(discord.ui.View):
                     archetype,
                     disabled=closed,
                     emoji=emoji_map.get(archetype, ARCHETYPE_EMOJIS[archetype]),
+                    class_emoji_map=class_emoji_map,
                 )
             )
         self.add_item(StatusButton(cog, event_id, disabled=closed))
@@ -563,9 +583,14 @@ class ArchetypeEmojiModal(discord.ui.Modal, title="Archetype button icons"):
             return
         for value in values.values():
             emoji = discord.PartialEmoji.from_str(value)
-            if emoji.id is not None and interaction.guild.get_emoji(emoji.id) is None:
+            if (
+                emoji.id is not None
+                and interaction.guild.get_emoji(emoji.id) is None
+                and not self.dashboard.cog.is_application_emoji_id(emoji.id)
+            ):
                 await interaction.response.send_message(
-                    "Custom button icons must be emojis uploaded to this Discord server.",
+                    "Custom button icons must be uploaded to this Discord server or belong "
+                    "to this bot's application emoji pack.",
                     ephemeral=True,
                 )
                 return
@@ -697,7 +722,38 @@ class ConfigDashboardView(discord.ui.View):
     async def icons(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         settings = await self.cog.get_guild_settings(interaction.guild_id)
         await interaction.response.send_modal(
-            ArchetypeEmojiModal(self, settings.get("archetype_emojis", {}))
+            ArchetypeEmojiModal(
+                self,
+                self.cog.resolve_archetype_emoji_map(
+                    interaction.guild, settings.get("archetype_emojis", {})
+                ),
+            )
+        )
+
+    @discord.ui.button(
+        label="Sync EQ2 icons",
+        style=discord.ButtonStyle.success,
+        emoji="🎨",
+        row=4,
+    )
+    async def sync_icons(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if not await self.cog.bot.is_owner(interaction.user):
+            await ephemeral_error(
+                interaction,
+                "Only the Red bot owner can change the bot's shared application emojis.",
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            created, reused, refreshed = await self.cog.sync_application_icons()
+        except RaidInputError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await self.refresh_message()
+        await interaction.followup.send(
+            f"EQ2 icons are ready: **{created} created**, **{reused} reused**, and "
+            f"**{refreshed} active raid message(s) refreshed**.",
+            ephemeral=True,
         )
 
 

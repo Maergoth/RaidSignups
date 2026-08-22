@@ -14,6 +14,8 @@ It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, a
 - Live roster embed with Discord-localized timestamps
 - Persistent buttons and dropdowns that resume after a Red restart
 - Organizer roles plus automatic access for users with Manage Server
+- Bundled authentic icons for all 26 classes and all four archetypes
+- One-click application-emoji sync that does not consume server emoji slots
 - Configurable archetype button icons with Unicode fallbacks
 - Close/reopen signups, edit events, archive events, and export CSV rosters
 - Both slash commands and traditional Red prefix commands
@@ -47,6 +49,10 @@ Then run:
 
 Choose a default raid channel and organizer roles, confirm the timezone, and set the default duration and description. You can now run `/create`.
 
+As the Red bot owner, click **Sync EQ2 icons** in `/raid setup` once. The cog uploads its
+30 bundled PNGs as application emojis and immediately refreshes active raid messages. The
+same icon pack works across every server using the bot and does not consume guild emoji slots.
+
 ## Install from a downloaded folder or ZIP
 
 Extract the project somewhere outside Red's core and data folders. The path supplied to `addpath` must be the folder that directly contains the `reverbraid` package.
@@ -69,6 +75,7 @@ reverb-raid-signup-helper/
     ├── __init__.py
     ├── info.json
     ├── constants.py
+    ├── assets/icons/ (30 bundled EQ2 icons)
     ├── models.py
     ├── reverbraid.py
     ├── views.py
@@ -96,6 +103,7 @@ Every slash command also works as a traditional text command. For example, `/rai
 | `/create` | Organizer | Start the private raid creation wizard |
 | `/raid create` | Organizer | Alternate grouped form of `/create` |
 | `/raid setup` | Manage Server | Open the Discord configuration dashboard |
+| `/raid syncicons` | Red bot owner | Install or repair all 30 bundled EQ2 application emojis |
 | `/raid list` | Everyone | List upcoming, non-archived raids |
 | `/raid show event_id` | Everyone | Show a current roster by event ID |
 | `/raid manage event_id` | Event creator or organizer | Open edit, close, export, and archive controls |
@@ -119,9 +127,17 @@ The posted message has one button per EQ2 archetype:
 
 Choosing a class signs the user up as attending. **Status…** changes that response to tentative, late, or absent, or withdraws it entirely. A user can select a status before choosing a class, which intentionally supports undecided or absent responses.
 
-### Optional EQ2 artwork
+### Bundled EQ2 artwork
 
-Discord buttons cannot use ordinary PNG files directly; they accept Unicode or Discord emojis. To use authentic EQ2 artwork, download the icons you prefer from the [EQ2 Wiki icon category](https://eq2.fandom.com/wiki/Category:Icons), upload four of them to your Discord server as custom emojis, then open `/raid setup` → **Button icons** and paste the Fighter, Priest, Mage, and Scout emojis. The cog stores the custom emoji markup and uses it on new and subsequently refreshed raid messages. If an icon is unavailable, the built-in Unicode icon remains in place.
+Discord buttons and dropdowns cannot display ordinary local PNG files directly. Reverb Raid
+therefore includes all 30 supplied EQ2 icons and installs them as bot-owned application emojis.
+Run `/raid syncicons`, or use `/raid setup` → **Sync EQ2 icons**, once as the Red bot owner.
+
+The four archetype icons appear on signup buttons and roster headings. Each of the 26 class
+icons appears in its class dropdown and beside that class in the live roster. Existing active
+raid messages are refreshed after a sync. If Discord's application-emoji service is unavailable,
+the cog retains safe Unicode archetype fallbacks. Server-specific archetype overrides remain
+available through `/raid setup` → **Button icons**.
 
 ## Time handling
 
