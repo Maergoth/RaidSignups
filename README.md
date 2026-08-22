@@ -1,3 +1,160 @@
-# RaidSignups
+# Reverb Raid Sign-up Helper
 
-Initializing Reverb Raid Sign-up Helper.
+Reverb Raid is a Red-DiscordBot cog for planning EverQuest II raids directly in Discord. An organizer runs `/create`, completes a private DM wizard, and the bot posts a persistent signup panel modeled after the practical parts of Raid-Helper.
+
+It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, and **Python 3.11**.
+
+## What it does
+
+- Private, five-step DM creation wizard through `/create` or `/raid create`
+- Native Discord configuration dashboard through `/raid setup`
+- All 26 EQ2 classes grouped into Fighter, Priest, Mage, and Scout
+- Attending, tentative, late, absent, and withdraw responses
+- Optional signup notes such as “30 minutes late”
+- Live roster embed with Discord-localized timestamps
+- Persistent buttons and dropdowns that resume after a Red restart
+- Organizer roles plus automatic access for users with Manage Server
+- Configurable archetype button icons with Unicode fallbacks
+- Close/reopen signups, edit events, archive events, and export CSV rosters
+- Both slash commands and traditional Red prefix commands
+- Red-compatible end-user data export and deletion hooks
+- No external API keys, database, website, or background web service
+
+## Install from the cog repository
+
+Run these commands in Discord as the Red bot owner. Replace `[p]` with your bot's prefix.
+
+```text
+[p]repo add reverb-raid https://github.com/Maergoth/reverb-raid-signup-helper
+[p]cog install reverb-raid reverbraid
+[p]load reverbraid
+```
+
+Enable and sync the slash commands:
+
+```text
+[p]slash enablecog ReverbRaid
+[p]slash sync
+```
+
+Discord can take a few minutes to show globally synced commands. For immediate testing in one server, pass that server to Red's optional `[guild]` argument for `[p]slash sync`.
+
+Then run:
+
+```text
+/raid setup
+```
+
+Choose a default raid channel and organizer roles, confirm the timezone, and set the default duration and description. You can now run `/create`.
+
+## Install from a downloaded folder or ZIP
+
+Extract the project somewhere outside Red's core and data folders. The path supplied to `addpath` must be the folder that directly contains the `reverbraid` package.
+
+Windows example:
+
+```text
+[p]addpath C:\Red-Cogs\reverb-raid-signup-helper
+[p]load reverbraid
+[p]slash enablecog ReverbRaid
+[p]slash sync
+```
+
+This follows Red's standard local cog layout:
+
+```text
+reverb-raid-signup-helper/
+├── info.json
+└── reverbraid/
+    ├── __init__.py
+    ├── info.json
+    ├── constants.py
+    ├── models.py
+    ├── reverbraid.py
+    ├── views.py
+    └── wizard.py
+```
+
+## Initial Discord permissions
+
+The bot needs these permissions in the raid channel:
+
+- View Channel
+- Send Messages
+- Embed Links
+- Read Message History
+- Attach Files (only needed for CSV export)
+
+Members also need permission to use application commands. The bot does **not** need Administrator or Manage Events. Organizers must allow DMs from the server while using the creation wizard.
+
+## Commands
+
+Every slash command also works as a traditional text command. For example, `/raid list` becomes `[p]raid list`.
+
+| Command | Who can use it | Purpose |
+| --- | --- | --- |
+| `/create` | Organizer | Start the private raid creation wizard |
+| `/raid create` | Organizer | Alternate grouped form of `/create` |
+| `/raid setup` | Manage Server | Open the Discord configuration dashboard |
+| `/raid list` | Everyone | List upcoming, non-archived raids |
+| `/raid show event_id` | Everyone | Show a current roster by event ID |
+| `/raid manage event_id` | Event creator or organizer | Open edit, close, export, and archive controls |
+| `/raid timezone timezone_name` | Manage Server | Set the IANA timezone |
+| `/raid channel channel` | Manage Server | Set the default raid channel |
+| `/raid duration duration` | Manage Server | Set the default duration |
+| `/raid description description` | Manage Server | Set the default description |
+| `/raid organizerrole add\|remove role` | Manage Server | Add or remove an organizer role |
+| `/raid mentionrole [role]` | Manage Server | Set or clear the new-raid announcement role |
+
+An **organizer** is any user who has Manage Server, is the Red bot owner, or holds one of the roles selected in `/raid setup`. The creator of an event can always manage that event.
+
+## Signup behavior
+
+The posted message has one button per EQ2 archetype:
+
+- Fighter: Guardian, Berserker, Paladin, Shadowknight, Monk, Bruiser
+- Priest: Templar, Inquisitor, Warden, Fury, Mystic, Defiler, Channeler
+- Mage: Wizard, Warlock, Illusionist, Coercer, Conjuror, Necromancer
+- Scout: Brigand, Swashbuckler, Troubador, Dirge, Ranger, Assassin, Beastlord
+
+Choosing a class signs the user up as attending. **Status…** changes that response to tentative, late, or absent, or withdraws it entirely. A user can select a status before choosing a class, which intentionally supports undecided or absent responses.
+
+### Optional EQ2 artwork
+
+Discord buttons cannot use ordinary PNG files directly; they accept Unicode or Discord emojis. To use authentic EQ2 artwork, download the icons you prefer from the [EQ2 Wiki icon category](https://eq2.fandom.com/wiki/Category:Icons), upload four of them to your Discord server as custom emojis, then open `/raid setup` → **Button icons** and paste the Fighter, Priest, Mage, and Scout emojis. The cog stores the custom emoji markup and uses it on new and subsequently refreshed raid messages. If an icon is unavailable, the built-in Unicode icon remains in place.
+
+## Time handling
+
+The server timezone defaults to `America/New_York` and can be changed to any IANA timezone in `/raid setup`. Creation accepts forms such as:
+
+```text
+2026-08-28 8:00 PM
+Friday 8 PM
+tomorrow 20:00
+2026-08-28 20:00 -04:00
+```
+
+Times are stored in UTC and displayed with Discord timestamps, so each member sees the raid in their own local timezone. Ambiguous and nonexistent daylight-saving times are rejected with a useful correction prompt.
+
+## Persistence, privacy, and backups
+
+Raid settings and rosters use Red's `Config` storage for the guild. Buttons use stable custom IDs and are re-registered during `cog_load`, so active raid messages continue working after restarts and cog reloads.
+
+The cog stores only data needed for the roster: Discord user ID, display name, class, status, optional note, and the event creator ID. It implements Red's `red_get_data_for_user` and `red_delete_data_for_user` hooks. Archiving disables the message controls but deliberately retains the roster for organizer history and CSV export.
+
+Back up this cog the same way you back up the rest of the Red instance data. Do not copy or commit Red's `config.json`, bot token, or complete data directory into this repository.
+
+## Development and verification
+
+Run the domain tests without starting Discord:
+
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q reverbraid
+```
+
+The GitHub Actions workflow repeats these checks after installing Red 3.5.24 on Python 3.11 and performs a full cog import.
+
+## License
+
+MIT

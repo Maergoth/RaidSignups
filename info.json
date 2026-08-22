@@ -1,0 +1,7 @@
+{
+  "author": ["Maergoth"],
+  "description": "Production-ready Red-DiscordBot cogs by Maergoth.",
+  "install_msg": "Thanks for adding the Reverb Raid cog repository. Install `reverbraid`, load it, then run `[p]raid setup`.",
+  "name": "Reverb Raid Sign-up Helper",
+  "short": "EverQuest II raid planning for Red-DiscordBot"
+}
