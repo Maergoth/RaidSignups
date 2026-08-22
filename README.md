@@ -33,7 +33,7 @@ Run these commands in Discord as the Red bot owner. Replace `[p]` with your bot'
 Enable and sync the slash commands:
 
 ```text
-[p]slash enablecog ReverbRaid
+[p]slash enablecog reverbraid
 [p]slash sync
 ```
 
@@ -56,7 +56,7 @@ Windows example:
 ```text
 [p]addpath C:\Red-Cogs\reverb-raid-signup-helper
 [p]load reverbraid
-[p]slash enablecog ReverbRaid
+[p]slash enablecog reverbraid
 [p]slash sync
 ```
 

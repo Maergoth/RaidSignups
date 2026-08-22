@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 - 2026-08-22
+
+- Corrected the case-sensitive Red slash-enablement command to use `reverbraid`.
+
 ## 1.0.0 - 2026-08-22
 
 - Added private DM raid creation wizard through `/create` and `/raid create`.
