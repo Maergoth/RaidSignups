@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 - 2026-08-22
+
+- Added a Bench availability status for members who can be contacted if needed.
+- Added a separate Bench roster section that does not count members in active class columns.
+- Allowed Bench selection without a class, matching Absent behavior.
+- Kept class and availability independent, including when Bench or Absent is selected first.
+
 ## 1.1.0 - 2026-08-22
 
 - Bundled authentic artwork for all 26 EverQuest II classes and all four archetypes.

@@ -167,7 +167,7 @@ class StatusSelect(discord.ui.Select):
         ]
         options.append(discord.SelectOption(label="Withdraw signup", value="withdraw", emoji="❌"))
         super().__init__(
-            placeholder="Attending, tentative, late, absent, or withdraw…",
+            placeholder="Attending, tentative, late, bench, absent, or withdraw…",
             min_values=1,
             max_values=1,
             options=options,

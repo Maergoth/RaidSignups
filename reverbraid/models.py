@@ -140,15 +140,22 @@ def normalize_signup(signup: Mapping[str, Any]) -> Dict[str, Any]:
 
 def group_roster(
     roster: Mapping[str, Mapping[str, Any]],
-) -> Tuple[Dict[str, List[Tuple[str, Dict[str, Any]]]], List[Tuple[str, Dict[str, Any]]]]:
-    """Group non-absent signups by archetype and return absences separately."""
+) -> Tuple[
+    Dict[str, List[Tuple[str, Dict[str, Any]]]],
+    List[Tuple[str, Dict[str, Any]]],
+    List[Tuple[str, Dict[str, Any]]],
+]:
+    """Group active signups by archetype and return bench/absence lists separately."""
     grouped: MutableMapping[str, List[Tuple[str, Dict[str, Any]]]] = defaultdict(list)
+    bench: List[Tuple[str, Dict[str, Any]]] = []
     absent: List[Tuple[str, Dict[str, Any]]] = []
 
     for user_id, raw_signup in roster.items():
         signup = normalize_signup(raw_signup)
         item = (str(user_id), signup)
-        if signup["status"] == "absent":
+        if signup["status"] == "bench":
+            bench.append(item)
+        elif signup["status"] == "absent":
             absent.append(item)
         else:
             grouped[signup["archetype"] or "unassigned"].append(item)
@@ -168,8 +175,9 @@ def group_roster(
 
     for values in grouped.values():
         values.sort(key=sort_key)
+    bench.sort(key=lambda item: item[1].get("display_name", "").casefold())
     absent.sort(key=lambda item: item[1].get("display_name", "").casefold())
-    return dict(grouped), absent
+    return dict(grouped), bench, absent
 
 
 def trim_text(value: str, limit: int) -> str:

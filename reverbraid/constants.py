@@ -81,6 +81,7 @@ STATUS_LABELS = {
     "attending": "Attending",
     "tentative": "Tentative",
     "late": "Late",
+    "bench": "Bench",
     "absent": "Absent",
 }
 
@@ -88,6 +89,7 @@ STATUS_EMOJIS = {
     "attending": "✅",
     "tentative": "⚖️",
     "late": "🕒",
+    "bench": "🪑",
     "absent": "🚫",
 }
 
@@ -99,7 +101,8 @@ CLASS_TO_ARCHETYPE = {
 
 DEFAULT_DESCRIPTION = (
     "The target will be decided once we see the roster. Sign up below with your class "
-    "and update your status if you will be tentative, late, or absent."
+    "and update your status if you will be tentative, late, available from the bench, "
+    "or absent."
 )
 
 DEFAULT_GUILD = {

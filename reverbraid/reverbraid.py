@@ -55,7 +55,7 @@ class ReverbRaid(commands.Cog):
     """Plan EQ2 raids with private creation prompts and persistent signup panels."""
 
     __author__ = "Maergoth"
-    __version__ = "1.1.0"
+    __version__ = "1.1.1"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -426,7 +426,7 @@ class ReverbRaid(commands.Cog):
         emoji_map = self.resolve_archetype_emoji_map(
             guild, await self.config.guild(guild).archetype_emojis()
         )
-        grouped, absent = group_roster(roster)
+        grouped, bench, absent = group_roster(roster)
         counts = defaultdict(int)
         for raw in roster.values():
             counts[normalize_signup(raw)["status"]] += 1
@@ -490,6 +490,12 @@ class ReverbRaid(commands.Cog):
                 chunk_lines(lines)[0],
                 inline=False,
             )
+        if bench:
+            lines = [self._format_signup_line(user_id, signup) for user_id, signup in bench]
+            for index, chunk in enumerate(chunk_lines(lines)):
+                name = f"🪑 Bench ({len(bench)})" if index == 0 else "Bench (continued)"
+                if not add_roster_field(name, chunk, inline=False):
+                    break
         if absent:
             lines = [self._format_signup_line(user_id, signup) for user_id, signup in absent]
             for index, chunk in enumerate(chunk_lines(lines)):
@@ -597,8 +603,6 @@ class ReverbRaid(commands.Cog):
         def mutate(_roster, _user_id, signup):
             signup["class_name"] = class_name
             signup["archetype"] = archetype
-            if signup.get("status") == "absent":
-                signup["status"] = "attending"
             return signup
 
         await self._mutate_signup(guild_id, event_id, member, mutate)

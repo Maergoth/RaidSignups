@@ -2,7 +2,7 @@
   "author": ["Maergoth"],
   "name": "ReverbRaid",
   "short": "Plan EverQuest II raids with interactive Discord signups.",
-  "description": "Create EQ2 raid events through a private DM wizard, collect all 26 class signups with attending, tentative, late, and absent statuses, manage events through Discord components, and export rosters as CSV. Persistent views continue working after Red restarts.",
+  "description": "Create EQ2 raid events through a private DM wizard, collect all 26 class signups with attending, tentative, late, bench, and absent statuses, manage events through Discord components, and export rosters as CSV. Persistent views continue working after Red restarts.",
   "install_msg": "Reverb Raid is installed. Run `[p]load reverbraid`, then `[p]raid setup` and use `Sync EQ2 icons` once as the Red bot owner. To expose `/create` and `/raid`, run `[p]slash enablecog reverbraid` followed by `[p]slash sync`. The cog name is case-sensitive.",
   "requirements": [],
   "tags": ["everquest", "everquest2", "eq2", "raid", "signup", "calendar", "utility"],

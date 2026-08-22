@@ -9,7 +9,7 @@ It was built and tested specifically for **Red 3.5.24**, **discord.py 2.7.1**, a
 - Private, five-step DM creation wizard through `/create` or `/raid create`
 - Native Discord configuration dashboard through `/raid setup`
 - All 26 EQ2 classes grouped into Fighter, Priest, Mage, and Scout
-- Attending, tentative, late, absent, and withdraw responses
+- Attending, tentative, late, bench, absent, and withdraw responses
 - Optional signup notes such as “30 minutes late”
 - Live roster embed with Discord-localized timestamps
 - Persistent buttons and dropdowns that resume after a Red restart
@@ -125,7 +125,11 @@ The posted message has one button per EQ2 archetype:
 - Mage: Wizard, Warlock, Illusionist, Coercer, Conjuror, Necromancer
 - Scout: Brigand, Swashbuckler, Troubador, Dirge, Ranger, Assassin, Beastlord
 
-Choosing a class signs the user up as attending. **Status…** changes that response to tentative, late, or absent, or withdraws it entirely. A user can select a status before choosing a class, which intentionally supports undecided or absent responses.
+Choosing a class signs the user up as attending. **Status…** changes that response to tentative,
+late, bench, or absent, or withdraws it entirely. Bench members appear in their own section so
+organizers can contact them if needed without counting them in the active class roster. A user
+can select Bench or Absent with or without a class. Class and availability are independent, so
+the member keeps the selected status regardless of which choice they make first.
 
 ### Bundled EQ2 artwork
 

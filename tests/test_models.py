@@ -76,17 +76,21 @@ class DateTimeTests(unittest.TestCase):
 
 class RosterTests(unittest.TestCase):
     def test_groups_and_normalizes_roster(self):
-        grouped, absent = group_roster(
+        grouped, bench, absent = group_roster(
             {
                 "1": {"class_name": "Paladin", "status": "late", "display_name": "A"},
                 "2": {"class_name": "Wizard", "status": "attending", "display_name": "B"},
                 "3": {"class_name": "Defiler", "status": "absent", "display_name": "C"},
                 "4": {"status": "tentative", "display_name": "D"},
+                "5": {"class_name": "Ranger", "status": "bench", "display_name": "E"},
+                "6": {"status": "bench", "display_name": "F"},
             }
         )
         self.assertEqual(grouped["fighter"][0][0], "1")
         self.assertEqual(grouped["mage"][0][0], "2")
         self.assertEqual(grouped["unassigned"][0][0], "4")
+        self.assertEqual([item[0] for item in bench], ["5", "6"])
+        self.assertNotIn("5", [item[0] for item in grouped.get("scout", [])])
         self.assertEqual(absent[0][0], "3")
 
     def test_chunk_lines_honors_limit(self):
