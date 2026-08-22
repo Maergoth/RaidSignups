@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
+from reverbraid.constants import ARCHETYPE_EMOJIS
 from reverbraid.models import (
     RaidInputError,
     chunk_lines,
@@ -83,6 +84,19 @@ class RosterTests(unittest.TestCase):
     def test_chunk_lines_honors_limit(self):
         chunks = chunk_lines(["a" * 10, "b" * 10], limit=15)
         self.assertEqual(chunks, ["a" * 10, "b" * 10])
+
+
+class ComponentEmojiTests(unittest.TestCase):
+    def test_default_component_emojis_are_discord_safe(self):
+        self.assertEqual(
+            ARCHETYPE_EMOJIS,
+            {
+                "fighter": "🛡️",
+                "priest": "✨",
+                "mage": "🔮",
+                "scout": "🗡️",
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ ARCHETYPE_LABELS = {
 }
 
 ARCHETYPE_EMOJIS = {
-    "fighter": "⛨️",
+    "fighter": "🛡️",
     "priest": "✨",
     "mage": "🔮",
     "scout": "🗡️",

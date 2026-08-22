@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2 - 2026-08-22
+
+- Replaced the unsupported Fighter glyph with Discord's valid shield emoji.
+- Added a regression test for the default component emoji set.
+
 ## 1.0.1 - 2026-08-22
 
 - Corrected the case-sensitive Red slash-enablement command to use `reverbraid`.
